@@ -7,10 +7,20 @@
 #include <QLineEdit>
 #include <QDialog>
 #include <QtSerialPort/QSerialPort>
+#include <QTimer>
+#include <QQueue>
+#include <QTextStream>
+#include <iostream>
+#include "wpid.h"
+#include "qcustomplot.h"
 
 namespace Ui {
 class LaserSerialPort;
 }
+
+class wpid;
+class test;
+class SortDialog;
 
 class LaserSerialPort : public QMainWindow
 {
@@ -18,7 +28,6 @@ class LaserSerialPort : public QMainWindow
 
 public:
     QByteArray getData(){return data;}
-    void putData();
     explicit LaserSerialPort(QWidget *parent = 0);
     ~LaserSerialPort();
 
@@ -41,12 +50,19 @@ private:
     Settings UARTsettings;
     QSerialPort *serial;
     QByteArray data;
+    wpid *piddialog;
     bool serialPortConnected;
-    bool laserClosed;
+    bool boardConnected;
+//    QTimer *dataTimer;
+//    QQueue<int> *TData;
     void fillPortsParameters();
     void fillPortsInfo();  
-    void openSerialPort();
+    bool openSerialPort();
     void closeSerialPort();
+    void initialPlot();
+    void processData();
+    void dataPlot(int value);
+
 
 private slots:
     void showPortInfo(int idx);
@@ -55,8 +71,11 @@ private slots:
     bool writeData();
     void readData();
     void updateUARTSettings();
-    void updateSendGroup(int index);
     void shutDownLaser();
+    void setPID();
+    void openhelpurl();
+    void setDefaultValue();
+    void setValue();
 };
 
 #endif // LASERSERIALPORT_H

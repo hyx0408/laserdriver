@@ -5,15 +5,20 @@
 #include <QMessageBox>
 #include <QByteArray>
 #include <QObject>
+#include <QPalette>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QDir>
 
 LaserSerialPort::LaserSerialPort(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::LaserSerialPort)
 {
     ui->setupUi(this);
-    laserClosed = false;
-    serialPortConnected = 0;
+    serialPortConnected = false;
+    boardConnected = false;
     serial = new QSerialPort(this);
+    piddialog = new wpid(this);
     connect(ui->serialPortInfoListBox, SIGNAL(currentIndexChanged(int)),
             this, SLOT(showPortInfo(int)));
     connect(ui->connectButton, SIGNAL(clicked()),
@@ -26,14 +31,16 @@ LaserSerialPort::LaserSerialPort(QWidget *parent) :
             this, SLOT(writeData()));
     connect(ui->sendButtonL2, SIGNAL(clicked()),
             this, SLOT(writeData()));
-    connect(ui->sendButtonL3A, SIGNAL(clicked()),
-            this, SLOT(writeData()));
-    connect(ui->sendButtonL3B, SIGNAL(clicked()),
+    connect(ui->sendButtonL3, SIGNAL(clicked()),
             this, SLOT(writeData()));
     connect(ui->sendButtonT1, SIGNAL(clicked()),
             this, SLOT(writeData()));
-    connect(ui->sendButtonT2, SIGNAL(clicked()),
+    connect(ui->sendButtonT2Open, SIGNAL(toggled(bool)),
             this, SLOT(writeData()));
+    connect(piddialog, SIGNAL(setPIDTDefaultValue()),
+            this, SLOT(setDefaultValue()));
+    connect(piddialog, SIGNAL(setPIDTValue()),
+            this, SLOT(setValue()));
     connect(serial, SIGNAL(readyRead()),
             this, SLOT(readData()));
     connect(ui->baudRateBox, SIGNAL(currentIndexChanged(int)),
@@ -48,134 +55,216 @@ LaserSerialPort::LaserSerialPort(QWidget *parent) :
             this, SLOT(updateUARTSettings()));
     connect(ui->shutDownButton,SIGNAL(clicked()),
             this,SLOT(shutDownLaser()));
-    ui->textBrowser->insertPlainText(tr("你好,欢迎使用hyx串口助手!\r\n"));
+    connect(ui->setPIDAction, SIGNAL(triggered()),
+            this, SLOT(setPID()));
+    connect(ui->actionAbout, SIGNAL(triggered()),
+            this, SLOT(openhelpurl()));
+    QString * info = new QString();
+    QTextStream infostram(info);
+    infostram << "LaserDriver v2.0!" << endl;
+    ui->textBrowser->insertPlainText(*info);
     fillPortsParameters();
     fillPortsInfo();
+    initialPlot();
     updateUARTSettings();
+    //
+//    TData = new QQueue<qint16>;
+//    dataTimer = new QTimer(this);
+//    connect(dataTimer, SIGNAL(timeout()), this, SLOT(realtimeDataSlot()));
+//    dataTimer->start(100);
+}
+
+void LaserSerialPort::initialPlot()
+{
+    //set up ui->customPlot
+    ui->customPlot->setBackground(this->palette().color(QPalette::Window));
+    ui->customPlot->axisRect()->setBackground(Qt::white);
+
+    ui->customPlot->addGraph(ui->customPlot->xAxis,ui->customPlot->yAxis2); // blue line
+    ui->customPlot->graph(0)->setPen(QPen(Qt::blue));
+    ui->customPlot->graph(0)->setAntialiasedFill(false);
+
+    ui->customPlot->addGraph(ui->customPlot->xAxis,ui->customPlot->yAxis2); // blue dot
+    ui->customPlot->graph(1)->setPen(QPen(Qt::blue));
+    ui->customPlot->graph(1)->setLineStyle(QCPGraph::lsNone);
+    ui->customPlot->graph(1)->setScatterStyle(QCPScatterStyle::ssDisc);
+
+    ui->customPlot->xAxis->setTickLabelType(QCPAxis::ltDateTime);
+    ui->customPlot->xAxis->setDateTimeFormat("mm:ss");
+    ui->customPlot->xAxis->setAutoTickStep(false);
+    ui->customPlot->xAxis->setTickStep(10);
+    ui->customPlot->yAxis->setAutoTickStep(true);
+    ui->customPlot->yAxis2->setAutoTickStep(true);
+    ui->customPlot->xAxis2->setTickLabels(false);
+    ui->customPlot->yAxis->setTickLabels(false);
+    //ui->customPlot->axisRect()->setupFullAxesBox();
+    ui->customPlot->xAxis->setLabel(tr("时间"));
+    ui->customPlot->yAxis2->setLabel(tr("温度"));
+    ui->customPlot->yAxis2->setVisible(true);
+    ui->customPlot->xAxis2->setVisible(true);
+    // make ticks on bottom axis go outward:
+    ui->customPlot->xAxis->setTickLength(0, 5);
+    ui->customPlot->xAxis->setSubTickLength(0, 3);
+    // make ticks on right axis go inward and outward:
+    ui->customPlot->yAxis2->setTickLength(3, 3);
+    ui->customPlot->yAxis2->setSubTickLength(1, 1);
+    // make left and bottom axes transfer their ranges to right and top axes:
+    connect(ui->customPlot->xAxis, SIGNAL(rangeChanged(QCPRange)), ui->customPlot->xAxis2, SLOT(setRange(QCPRange)));
+    connect(ui->customPlot->yAxis2, SIGNAL(rangeChanged(QCPRange)), ui->customPlot->yAxis, SLOT(setRange(QCPRange)));
 }
 
 void LaserSerialPort::connet2com()
 {
-    ui->connectButton->setDisabled(true);
-    ui->disconnectButton->setEnabled(true);
-    ui->selectBox->setDisabled(true);
-    ui->parametersBox->setDisabled(true);
-    openSerialPort();
+    QByteArray senddata = QByteArray();
+    if(openSerialPort()){
+        ui->connectButton->setDisabled(true);
+        ui->disconnectButton->setEnabled(true);
+        ui->selectBox->setDisabled(true);
+        ui->parametersBox->setDisabled(true);
+        ui->sendButtonL1->setEnabled(true);
+        ui->sendButtonL2->setEnabled(true);
+        ui->sendButtonT2Close->setEnabled(true);
+        ui->sendButtonL3->setEnabled(true);
+        ui->sendButtonT1->setEnabled(true);
+        ui->sendButtonT2Open->setEnabled(true);
+        ui->shutDownButton->setEnabled(true);
+        senddata.append(0x80);
+        senddata.append(0x18);
+        senddata.append(0x38);
+        serial->write(senddata);
+    }
 }
 
 void LaserSerialPort::disconnet2com()
 {
-    ui->connectButton->setEnabled(true);
-    ui->selectBox->setEnabled(true);
-    ui->parametersBox->setEnabled(true);
-    ui->disconnectButton->setDisabled(true);
-    ui->sendButtonL1->setDisabled(true);
-    ui->sendButtonL2->setDisabled(true);
-    ui->sendButtonT1->setDisabled(true);
-    ui->sendButtonT2->setDisabled(true);
-    ui->sendButtonL3A->setDisabled(true);
-    ui->sendButtonL3B->setDisabled(true);
-    ui->shutDownButton->setDisabled(true);
-    closeSerialPort();
+    QByteArray senddata = QByteArray();
+    if(ui->spinBoxL1->value() == 0 && ui->spinBoxL2->value() == 0 && ui->spinBoxL3->value() == 0){
+        ui->connectButton->setEnabled(true);
+        ui->selectBox->setEnabled(true);
+        ui->parametersBox->setEnabled(true);
+        ui->disconnectButton->setDisabled(true);
+        ui->sendButtonL1->setDisabled(true);
+        ui->sendButtonL2->setDisabled(true);
+        ui->sendButtonT1->setDisabled(true);
+        ui->sendButtonT2Open->setDisabled(true);
+        ui->sendButtonL3->setDisabled(true);
+        ui->sendButtonT2Close->setDisabled(true);
+        ui->shutDownButton->setDisabled(true);
+        senddata.append(0x84);
+        serial->write(senddata);
+        serial->flush();
+        if(!boardConnected)
+            closeSerialPort();
+    } else {
+        QMessageBox::warning(this, tr("Warning!"), tr("Laser Driver is not completely closed!"),QMessageBox::Cancel);
+    }
 }
 
 bool LaserSerialPort::writeData()
 {
     QByteArray senddata = QByteArray();
-    char command;
-    char dacnumber;
-    char channel;
-    short v;
-    char first4bits;
-    char last8bits;
-    char address = 0;
-    command = char(0x60);
+    int v;
     unsigned int ID = sender()->property("userButtonID").toUInt();
-    if(ID == 1 || ID == 2)
-        dacnumber = char(0x02);
-    if(ID == 3 || ID == 4)
-        dacnumber = char(0x01);
-    if(ID == 5 || ID == 6)
-        dacnumber = char(0x04);
-    if(ID%2)
-        channel = char(0x00);
-    else
-        channel = char(0x10);
-//    command = (ui->commandBox->itemData(ui->commandBox->currentIndex())).toInt();
-//    dacnumber = (ui->dacNumberBox->itemData(ui->dacNumberBox->currentIndex())).toInt();
-//    channel = (ui->channelBox->itemData(ui->channelBox->currentIndex())).toInt();
     switch(ID){
-    case 1:v = ui->voltageSpinBoxL1->value();
-        ui->spinBox_1->setValue(v);
-        break;
-    case 2:v = ui->voltageSpinBoxT1->value();
-        ui->spinBox_2->setValue(v);
-        break;
-    case 3:v = ui->voltageSpinBoxL2->value();
-        ui->spinBox_3->setValue(v);
-        break;
-    case 4:v = ui->voltageSpinBoxT2->value();
-        ui->spinBox_4->setValue(v);
-        break;
-    case 5:v = ui->voltageSpinBoxL3A->value();
-        ui->spinBox_5->setValue(v);
-        break;
-    case 6:v = ui->voltageSpinBoxL3B->value();
-        ui->spinBox_6->setValue(v);
-        break;
-    default:break;
-    }
-    first4bits = (v>>8)&(short(0x000F));
-    last8bits = v&(short(0x00FF));
-//    switch (dacnumber|channel) {
-//    case char(0x01):
-//        address = char(0x10);
-//        break;
-//    case char(0x11):
-//        address = char(0x40);
-//        break;
-//    case char(0x02):
-//        address = char(0x20);
-//        break;
-//    case char(0x12):
-//        address = char(0x50);
-//        break;
-//    case char(0x04):
-//        address = char(0x30);
-//        break;
-//    case char(0x14):
-//        address = char(0x60);
-//        break;
-//    default:
-//        break;
-//    }
-    switch(command){
-    case char(0x60):
-        senddata.append(command|dacnumber);
-        senddata.append(channel|first4bits);
-        senddata.append(last8bits);
-        break;
-//    case char(0x80):
-//        senddata.append(command|char(0x01));
-//        senddata.append(address);
-//        senddata.append(channel|first4bits);
-//        senddata.append(last8bits);
-//        break;
-//    case char(0x00):
-//        senddata.append(command|(channel>>1)|dacnumber);
-//        break;
-    default:
-        break;
+    case 2: senddata.append(0x58);
+            v = ui->voltageSliderT1->value();
+            senddata.append((v>>8)&(0x0F));
+            senddata.append(v&(0xFF));
+            break;
+    case 3: senddata.append(0x50);
+            v = ui->voltageSliderL1->value();
+            senddata.append((v>>8)&(0x0F));
+            senddata.append(v&(0xFF));
+            break;
+    case 4: senddata.append(0x60);
+            v = ui->voltageSliderL2->value();
+            senddata.append((v>>8)&(0x0F));
+            senddata.append(v&(0xFF));
+            break;
+    case 5: senddata.append(0x68);
+            v = ui->voltageSliderL3->value();
+            senddata.append((v>>8)&(0x0F));
+            senddata.append(v&(0xFF));
+            break;
+    case 7: if(ui->sendButtonT2Open->isChecked())
+                senddata.append(0x70);
+            else
+                senddata.append(0x78);
+            break;
+    default:ui->textBrowser->insertPlainText(tr("Error Command!\r\n"));
+            break;
     }
     if(!senddata.isEmpty())
+    {
         serial->write(senddata);
-    return 1;
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+void LaserSerialPort::setDefaultValue(){
+    QByteArray senddata = QByteArray();
+    double t;
+    if(piddialog->kEnable) {
+        senddata.append(0x20);
+        senddata.append((piddialog->k1)>>8);
+        senddata.append((piddialog->k1)&0xFF);
+        senddata.append((piddialog->k2)>>8);
+        senddata.append((piddialog->k2)&0xFF);
+        senddata.append((piddialog->k3)>>8);
+        senddata.append((piddialog->k3)&0xFF);
+        senddata.append(0x40);
+        t = piddialog->getT();
+        double k;
+        k = qExp((1/(t+273.15)-2.765e-3)/2.553e-4);
+        int v;
+        v = (819200-16384*k)/(300+3*k);
+        senddata.append((v>>8)&(0x0F));
+        senddata.append(v&(0xFF));
+     }
+    if(!senddata.isEmpty())
+    {
+        serial->write(senddata);
+    }
+}
+
+void LaserSerialPort::setValue(){
+    QByteArray senddata = QByteArray();
+    double t;
+    if(piddialog->kEnable) {
+        senddata.append(0x10);
+        senddata.append((piddialog->k1)>>8);
+        senddata.append((piddialog->k1)&0xFF);
+        senddata.append((piddialog->k2)>>8);
+        senddata.append((piddialog->k2)&0xFF);
+        senddata.append((piddialog->k3)>>8);
+        senddata.append((piddialog->k3)&0xFF);
+        senddata.append(0x30);
+        t = piddialog->getT();
+        double k;
+        k = qExp((1/(t+273.15)-2.765e-3)/2.553e-4);
+        int v;
+        v = (819200-16384*k)/(300+3*k);
+        senddata.append((v>>8)&(0x0F));
+        senddata.append(v&(0xFF));
+     }
+    if(!senddata.isEmpty())
+    {
+        serial->write(senddata);
+    }
 }
 
 void LaserSerialPort::readData()
 {
-    data = serial->readAll();
-    putData();
+    QByteArray temp = serial->readAll();
+    if(temp.size() != 0)
+    {
+        data.append(temp);
+        processData();
+    }
 }
 
 
@@ -285,7 +374,7 @@ void LaserSerialPort::updateUARTSettings()
     UARTsettings.stringFlowControl = ui->flowControlBox->currentText();
 }
 
-void LaserSerialPort::openSerialPort()
+bool LaserSerialPort::openSerialPort()
 {
     serial->setPortName(ui->serialPortInfoListBox->currentText());
     serial->setBaudRate(UARTsettings.baudRate);
@@ -293,112 +382,216 @@ void LaserSerialPort::openSerialPort()
     serial->setParity(UARTsettings.parity);
     serial->setStopBits(UARTsettings.stopBits);
     serial->setFlowControl(UARTsettings.flowControl);
-    if (serial->open(QIODevice::ReadWrite)) {
-        if(laserClosed){
-            ui->sendButtonL1->setDisabled(true);
-            ui->sendButtonL2->setDisabled(true);
-            ui->sendButtonL3A->setDisabled(true);
-            ui->sendButtonL3B->setDisabled(true);
-            ui->sendButtonT1->setDisabled(true);
-            ui->sendButtonT2->setDisabled(true);
-        }
-        else{
-            ui->sendButtonL1->setEnabled(true);
-            ui->sendButtonL2->setEnabled(true);
-            ui->sendButtonL3A->setEnabled(true);
-            ui->sendButtonL3B->setEnabled(true);
-            ui->sendButtonT1->setEnabled(true);
-            ui->sendButtonT2->setEnabled(true);
-        }
-        ui->shutDownButton->setEnabled(true);
+    bool openSuccess = serial->open(QIODevice::ReadWrite);
+    if (openSuccess) {
+        ui->statusBar->showMessage(tr("Serial port open success."));
     } else {
         QMessageBox::critical(this, tr("Error"), serial->errorString());
-        ui->statusBar->showMessage(tr("Open error"));
+        ui->statusBar->showMessage(tr("Serial port open error!!!"));
     }
+    return openSuccess;
 }
 
 void LaserSerialPort::closeSerialPort()
 {
     serial->close();
+    ui->statusBar->showMessage(tr("Serial port close success."));
 }
 
-void LaserSerialPort::putData()
+void LaserSerialPort::processData()
 {
-    char *temp = data.data();
-    while(*temp)
-    {
-        ui->textBrowser->insertPlainText(tr("0b'"));
-        char a = *temp;
-        QString b = QString();
-        for(int i = 0; i<8; i++)
-        {
-            if(a&0x80)
-                b += "1";
-            else
-                b += "0";
-            a <<= 1;
+    int needProcess = data.size();
+    while(needProcess){
+        switch ((unsigned char) data.at(0)) {
+        case 0x18:
+            if(needProcess < 7)
+                needProcess = 0;
+            else{
+                int k1 = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                int k2 = -(((unsigned char) (~data.at(3)))*256+((unsigned char) (~data.at(4)))+1);
+                int k3 = ((unsigned char) data.at(5))*256+((unsigned char) data.at(6));
+                piddialog->showPIDValue(k1,k2,k3);
+                data.remove(0,7);
+                needProcess = data.size();
+            }
+            break;
+        case 0x28:
+            if(needProcess < 7)
+                needProcess = 0;
+            else{
+                int k1 = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                int k2 = -(((unsigned char) (~data.at(3)))*256+((unsigned char) (~data.at(4)))+1);
+                int k3 = ((unsigned char) data.at(5))*256+((unsigned char) data.at(6));
+                if(piddialog->checkK(k1,k2,k3))
+                    piddialog->setTips(tr("Setting default PID value success!\r\n"));
+                else
+                    piddialog->setTips(tr("Setting default PID value error!!!\r\n"));
+                data.remove(0,7);
+                needProcess = data.size();
+            }
+            break;
+        case 0x38:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int t = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                piddialog->showTValue(t);
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        case 0x48:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int t = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                if(piddialog->checkT(t))
+                    piddialog->setTips(tr("Setting default Temperature value success!\r\n"));
+                else
+                    piddialog->setTips(tr("Setting default Temperature value error!!!\r\n"));
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        case 0x50:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int v = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                ui->spinBoxL1->setValue(v);
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        case 0x58:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int v = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                ui->spinBoxT1->setValue(v);
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        case 0x60:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int v = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                ui->spinBoxL2->setValue(v);
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        case 0x68:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int v = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                ui->spinBoxL3->setValue(v);
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        case 0x70:
+            data.remove(0,1);
+            ui->textBrowser->insertPlainText(tr("Temperature controller is endabled!\r\n"));
+            needProcess = data.size();
+            break;
+        case 0x78:
+            data.remove(0,1);
+            ui->textBrowser->insertPlainText(tr("Temperature controller is disabled!\r\n"));
+            needProcess = data.size();
+            break;
+        case 0x80:
+            data.remove(0,1);
+            boardConnected = true;
+            ui->textBrowser->insertPlainText(tr("System is enabled!\r\n"));
+            needProcess = data.size();
+            break;
+        case 0x84:
+            data.remove(0,1);
+            if(boardConnected)
+                closeSerialPort();
+            boardConnected = false;
+            ui->textBrowser->insertPlainText(tr("System is disabled!\r\n"));
+            needProcess = data.size();
+            break;
+        case 0x88:
+            data.remove(0,1);
+            ui->textBrowser->insertPlainText(tr("Laser driver is closed!\r\n"));
+            ui->spinBoxL1->setValue(0);
+            ui->spinBoxL2->setValue(0);
+            ui->spinBoxL3->setValue(0);
+            needProcess = data.size();
+            break;
+        case 0x98:
+            data.remove(0,2);
+            needProcess = data.size();
+            break;
+        case 0xc0:
+            if(needProcess < 3)
+                needProcess = 0;
+            else{
+                int v = ((unsigned char) data.at(1))*256+((unsigned char) data.at(2));
+                dataPlot(v);
+                data.remove(0,3);
+                needProcess = data.size();
+            }
+            break;
+        default:
+            data.remove(0,1);
+            ui->textBrowser->insertPlainText(tr("Error Byte!!!\r\n"));
+            needProcess = data.size();
+            break;
         }
-        b.insert(4,",");
-        ui->textBrowser->insertPlainText(b);
-        temp++;
-        ui->textBrowser->insertPlainText(tr("  "));
     }
-}
-
-void LaserSerialPort::updateSendGroup(int index)
-{
-//    switch(index){
-//    case 0:
-//    case 1:
-//        ui->dacNumberBox->setEnabled(true);
-//        ui->channelBox->setEnabled(true);
-//        ui->voltageSlider->setEnabled(true);
-//        ui->voltageSpinBox->setEnabled(true);
-//        break;
-//    case 2:
-//        ui->dacNumberBox->setEnabled(true);
-//        ui->channelBox->setEnabled(true);
-//        ui->voltageSlider->setDisabled(true);
-//        ui->voltageSpinBox->setDisabled(true);
-//        break;
-//    default:
-//        break;
-//    }
-
 }
 
 void LaserSerialPort::shutDownLaser()
 {
-    if(laserClosed)
-    {
-        QByteArray senddata = QByteArray();
-        senddata.append(char(0xcc));
-        serial->write(senddata);
-        ui->shutDownButton->setText(tr("关断"));
-        ui->sendButtonL1->setEnabled(true);
-        ui->sendButtonL2->setEnabled(true);
-        ui->sendButtonL3A->setEnabled(true);
-        ui->sendButtonL3B->setEnabled(true);
-        ui->sendButtonT1->setEnabled(true);
-        ui->sendButtonT2->setEnabled(true);
-    } else {
-        QByteArray senddata = QByteArray();
-        senddata.append(char(0x33));
-        serial->write(senddata);
-        ui->shutDownButton->setText(tr("打开"));
-        ui->sendButtonL1->setDisabled(true);
-        ui->sendButtonL2->setDisabled(true);
-        ui->sendButtonL3A->setDisabled(true);
-        ui->sendButtonL3B->setDisabled(true);
-        ui->sendButtonT1->setDisabled(true);
-        ui->sendButtonT2->setDisabled(true);
-        ui->spinBox_1->setValue(0);
-        ui->spinBox_3->setValue(0);
-    }
-    laserClosed = !laserClosed;
+    QByteArray senddata = QByteArray();
+    senddata.append(0x88);
+    serial->write(senddata);
 }
+
+void LaserSerialPort::setPID()
+{
+   if(!piddialog)
+       piddialog = new wpid(this);
+   piddialog->show();
+   piddialog->activateWindow();
+}
+
+void LaserSerialPort::dataPlot(int value)
+{
+    // calculate two new data points:
+    double key = QDateTime::currentDateTime().toMSecsSinceEpoch()/1000.0;
+    double tvalue;
+    tvalue = 1/((2.765e-3)+(2.553e-4)*qLn((double)(819200-300*value)/(16384+3*value)))-273.15;
+    // add data to lines:
+    ui->lcdNumber->display(tvalue);
+    ui->customPlot->graph(0)->addData(key, tvalue);
+    // set data of dots:
+    ui->customPlot->graph(1)->clearData();
+    ui->customPlot->graph(1)->addData(key, tvalue);
+    // remove data of lines that's outside visible range:
+    ui->customPlot->graph(0)->removeDataBefore(key-60);
+    // rescale value (vertical) axis to fit the current data:
+    ui->customPlot->graph(0)->rescaleValueAxis();
+    // make key axis range scroll with the data (at a constant range size of 8):
+    ui->customPlot->xAxis->setRange(key+1, 60, Qt::AlignRight);
+    ui->customPlot->replot();
+}
+
+void LaserSerialPort::openhelpurl(){
+    QDesktopServices::openUrl(QUrl("http://www.baidu.com"));
+    QDesktopServices::openUrl(QUrl(QDir::currentPath()+"/1.mp3", QUrl::TolerantMode));
+}
+
 
 LaserSerialPort::~LaserSerialPort()
 {
     delete ui;
+//    delete TData;
 }

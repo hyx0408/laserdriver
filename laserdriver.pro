@@ -4,20 +4,29 @@
 #
 #-------------------------------------------------
 
-QT       += core gui serialport
+QT       += core\
+            gui\
+            serialport\
+            printsupport
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
 TARGET = laserdriver
 TEMPLATE = app
 
-
 SOURCES += main.cpp\
-        laserserialport.cpp
+        laserserialport.cpp \
+        wpid.cpp \
+    qcustomplot.cpp
 
-HEADERS  += laserserialport.h
+HEADERS  +=\
+        laserserialport.h \
+        wpid.h \
+    qcustomplot.h
 
-FORMS    += laserserialport.ui
+FORMS    += \
+        wpid.ui \
+    laserserialport.ui
 
 RESOURCES += \
     icon.qrc
